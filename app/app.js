@@ -1,151 +1,83 @@
-import {
-  divide,
-  filter,
-  pluck,
-  compose,
-  propEq,
-  zipWith,
-  multiply
-} from "ramda"
+import m from 'mithril'
+import { legislatorsUrl, membersUrl } from './model.js'
+import IsLoading from './is-loading'
+import {flatten,head,map,path, pluck,propEq,traverse} from 'ramda'
+import Task from 'data.task'
 
-import M from "moment"
+const log = m => v => {console.log(m,v); return v}
 
-const toChartData = (states) => {
-  let lastUpdated = M(states[0].lastUpdate).format("YYYY-MM-DD")
-  let lat = pluck("lat", states)
-  let lon = pluck("long", states)
-  let text = pluck("text", states)
-  let markerSize = zipWith(
-    divide,
-    pluck("deaths", states),
-    pluck("confirmed", states)
-  )
-  return [
-    {
-      type: "scattergeo",
-      locationmode: "USA-states",
-      lat,
-      lon,
-      hoverinfo: "text",
-      text,
-      lastUpdated,
-      marker: {
-        size: markerSize.map(multiply(100)),
-        line: {
-          color: "black",
-          width: 2
-        }
-      }
-    }
-  ]
+const getLegislators = (mdl) => state => mdl.HTTP(legislatorsUrl(state))
+
+const getMembers = mdl => cid => mdl.HTTP(membersUrl(cid)(mdl.data.year()))
+
+const saveLegislators = mdl => legislators => {
+  mdl.data.legislators = legislators;
+  return legislators
 }
 
-const formatState = ({
-  provinceState,
-  lat,
-  long,
-  confirmed,
-  recovered,
-  deaths,
-  active,
-  lastUpdate
-}) => ({
-  lat,
-  long,
-  text: `${provinceState}: confirmed: ${confirmed}, recovered: ${recovered}, deaths: ${deaths}, active: ${active}`,
-  confirmed,
-  recovered,
-  deaths,
-  active,
-  lastUpdate
-})
+const loadLegislatorsData = mdl =>
+  traverse(Task.of, getLegislators(mdl), mdl.states)
+    .map(map(path(['response', 'legislator'])))
+    .map(flatten)
+    .map(pluck('@attributes'))
+    .map(saveLegislators(mdl))
 
-const filterForUSA = (countries) =>
-  filter(propEq("countryRegion", "US"), countries)
+const loadMemberProfile = mdl => legislators =>
+  traverse(Task.of, getMembers(mdl), pluck('cid', legislators))
+  .map(map(path(['response', 'member_profile'])))
+  .map(flatten)
+  .map(pluck('@attributes'))
 
-const toPlot = (dom) => (details) => {
-  var USLayout = {
-    title: `2020 US City WuHan virus Epidemic; last Updated: ${details[0].lastUpdated}`,
-    showlegend: false,
-    geo: {
-      scope: "usa",
-      projection: {
-        type: "albers usa"
-      },
-      showland: true,
-      landcolor: "rgb(217, 217, 217)",
-      subunitwidth: 1,
-      countrywidth: 1,
-      subunitcolor: "rgb(255,255,255)",
-      countrycolor: "rgb(255,255,255)"
-    }
+const loadData = mdl => state => {
+  state.status = 'loading'
+  const onSuccess =members => {
+    mdl.data.legislators.map(leg => {
+      leg.data = head(members.filter(propEq('member_id', leg.cid)))
+    })
+    state.status = 'loaded'
   }
-  Plotly.newPlot(dom, details, USLayout)
+  const onError =err => {
+    console.error(err)
+    state.status = 'failed'
+  }
+
+  loadLegislatorsData(mdl).chain(loadMemberProfile(mdl)).fork(onError, onSuccess)
 }
 
-const formatLocation = (locations) => filterForUSA(locations).map(formatState)
 
-const getDetailsAndPlot = ({ dom, mdl, url }) => {
-  const onSuccess = (mdl) => (details) => {
-    mdl.data.details = compose(
-      toPlot(dom),
-      toChartData,
-      formatLocation
-    )(details)
-  }
-  const onError = (mdl) => (err) => {
-    mdl.err = err
-  }
-
-  m.request(url).then(onSuccess(mdl), onError(mdl))
-}
-
-const WuhanCrisis = () => {
+const PlotFinances = () => {
   return {
-    oncreate: ({ dom, attrs: { mdl } }) => {
-      getDetailsAndPlot({ dom, mdl, url: mdl.data.wuhan.confirmed.detail })
+    oncreate:({dom, attrs:{mdl}}) => {
+      let data = {type:'bar',
+                  x:mdl.data.legislators.map(l => l.firstlast),
+                  y:mdl.data.legislators.map(l => l.data.net_high)
+                }
+console.log('data', data)
+      return mdl.data.legislators && Plotly.newPlot('chart', [data]);
     },
-    view: () => m(".container")
+    view:({attrs:{mdl}}) =>
+       m('.', {id:'chart',style:{width: '100vw', height: '600px'}})
   }
 }
 
-const IsLoading = m(
-  "svg[xmlns='http://www.w3.org/2000/svg'][xmlns:xlink='http://www.w3.org/1999/xlink'][width='200px'][height='200px'][viewBox='0 0 100 100'][preserveAspectRatio='xMidYMid']",
-  {
-    style: {
-      margin: "auto",
-      background: "rgb(241, 242, 243)",
-      display: "block",
-      "shape-rendering": "auto"
-    }
-  },
-  m(
-    "path[d='M10 50A40 40 0 0 0 90 50A40 42 0 0 1 10 50'][fill='#85a2b6'][stroke='none'][transform='rotate(17.5738 50 51)']",
-    m(
-      "animateTransform[attributeName='transform'][type='rotate'][dur='1s'][repeatCount='indefinite'][keyTimes='0;1'][values='0 50 51;360 50 51']"
-    )
-  )
-)
-
-const loadWuhanVirusData = (mdl) => {
-  const onError = (mdl) => (err) => (mdl.err.wuhan = err)
-  const onSuccess = (mdl) => (data) => (mdl.data.wuhan = data)
-  m.request("https://covid19.mathdro.id/api").then(onSuccess(mdl), onError(mdl))
-}
-
-const wuhanStyle = (mdl) => ({
-  // backgroundImage: `url(${mdl.data.wuhan.image}) center`,
-  height: "100vh",
-  width: "100vw"
-})
-const WuhanVirus = (mdl) => {
+const Legislators = (mdl) => {
+  const state = {
+    status: 'loading'
+  }
   return {
-    oninit: () => loadWuhanVirusData(mdl),
-    view: () =>
-      mdl.data.wuhan
-        ? m(".container", { style: wuhanStyle(mdl) }, [m(WuhanCrisis, { mdl })])
-        : IsLoading
+    oninit: () => loadData(mdl)(state),
+    view: () => m('.',
+    state.status == 'loading' && IsLoading,
+    state.status == 'failed' && 'FAILED',
+    state.status == 'loaded' && [
+      m(PlotFinances, {mdl}),
+      m('input[type="range"]', {min: 2008, max:2016, step:1,value:mdl.data.year(), onchange:e => {mdl.data.year(e.target.value);
+      loadData(mdl)(state)
+      } }),
+      m('h1',mdl.data.year())
+    ],
+    )
   }
 }
 
-export default WuhanVirus
+export default Legislators

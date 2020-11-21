@@ -1,3 +1,3 @@
-# WuHan Virus Epidemic in USA
+# Legislators in USA
 
-using mithril-js and plotly
+using mithril-js and chartjs

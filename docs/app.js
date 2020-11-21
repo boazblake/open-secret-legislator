@@ -117,6 +117,7 @@
 
 (function() {
 var global = typeof window === 'undefined' ? this : window;
+var process;
 var __makeRelativeRequire = function(require, mappings, pref) {
   var none = {};
   var tryReq = function(name, pref) {
@@ -156,173 +157,130 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports["default"] = void 0;
 
+var _mithril = _interopRequireDefault(require("mithril"));
+
+var _model = require("./model.js");
+
+var _isLoading = _interopRequireDefault(require("./is-loading"));
+
 var _ramda = require("ramda");
 
-var _moment = _interopRequireDefault(require("moment"));
+var _data = _interopRequireDefault(require("data.task"));
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }
 
-var toChartData = function toChartData(states) {
-  var lastUpdated = (0, _moment["default"])(states[0].lastUpdate).format("YYYY-MM-DD");
-  var lat = (0, _ramda.pluck)("lat", states);
-  var lon = (0, _ramda.pluck)("long", states);
-  var text = (0, _ramda.pluck)("text", states);
-  var markerSize = (0, _ramda.zipWith)(_ramda.divide, (0, _ramda.pluck)("deaths", states), (0, _ramda.pluck)("confirmed", states));
-  return [{
-    type: "scattergeo",
-    locationmode: "USA-states",
-    lat: lat,
-    lon: lon,
-    hoverinfo: "text",
-    text: text,
-    lastUpdated: lastUpdated,
-    marker: {
-      size: markerSize.map((0, _ramda.multiply)(100)),
-      line: {
-        color: "black",
-        width: 2
-      }
-    }
-  }];
-};
-
-var formatState = function formatState(_ref) {
-  var provinceState = _ref.provinceState,
-      lat = _ref.lat,
-      _long = _ref["long"],
-      confirmed = _ref.confirmed,
-      recovered = _ref.recovered,
-      deaths = _ref.deaths,
-      active = _ref.active,
-      lastUpdate = _ref.lastUpdate;
-  return {
-    lat: lat,
-    "long": _long,
-    text: "".concat(provinceState, ": confirmed: ").concat(confirmed, ", recovered: ").concat(recovered, ", deaths: ").concat(deaths, ", active: ").concat(active),
-    confirmed: confirmed,
-    recovered: recovered,
-    deaths: deaths,
-    active: active,
-    lastUpdate: lastUpdate
+var log = function log(m) {
+  return function (v) {
+    console.log(m, v);
+    return v;
   };
 };
 
-var filterForUSA = function filterForUSA(countries) {
-  return (0, _ramda.filter)((0, _ramda.propEq)("countryRegion", "US"), countries);
-};
-
-var toPlot = function toPlot(dom) {
-  return function (details) {
-    var USLayout = {
-      title: "2020 US City WuHan virus Epidemic; last Updated: ".concat(details[0].lastUpdated),
-      showlegend: false,
-      geo: {
-        scope: "usa",
-        projection: {
-          type: "albers usa"
-        },
-        showland: true,
-        landcolor: "rgb(217, 217, 217)",
-        subunitwidth: 1,
-        countrywidth: 1,
-        subunitcolor: "rgb(255,255,255)",
-        countrycolor: "rgb(255,255,255)"
-      }
-    };
-    Plotly.newPlot(dom, details, USLayout);
+var getLegislators = function getLegislators(mdl) {
+  return function (state) {
+    return mdl.HTTP((0, _model.legislatorsUrl)(state));
   };
 };
 
-var formatLocation = function formatLocation(locations) {
-  return filterForUSA(locations).map(formatState);
+var getMembers = function getMembers(mdl) {
+  return function (cid) {
+    return mdl.HTTP((0, _model.membersUrl)(cid)(mdl.data.year()));
+  };
 };
 
-var getDetailsAndPlot = function getDetailsAndPlot(_ref2) {
-  var dom = _ref2.dom,
-      mdl = _ref2.mdl,
-      url = _ref2.url;
-
-  var onSuccess = function onSuccess(mdl) {
-    return function (details) {
-      mdl.data.details = (0, _ramda.compose)(toPlot(dom), toChartData, formatLocation)(details);
-    };
+var saveLegislators = function saveLegislators(mdl) {
+  return function (legislators) {
+    mdl.data.legislators = legislators;
+    return legislators;
   };
-
-  var onError = function onError(mdl) {
-    return function (err) {
-      mdl.err = err;
-    };
-  };
-
-  m.request(url).then(onSuccess(mdl), onError(mdl));
 };
 
-var WuhanCrisis = function WuhanCrisis() {
-  return {
-    oncreate: function oncreate(_ref3) {
-      var dom = _ref3.dom,
-          mdl = _ref3.attrs.mdl;
-      getDetailsAndPlot({
-        dom: dom,
-        mdl: mdl,
-        url: mdl.data.wuhan.confirmed.detail
+var loadLegislatorsData = function loadLegislatorsData(mdl) {
+  return (0, _ramda.traverse)(_data["default"].of, getLegislators(mdl), mdl.states).map((0, _ramda.map)((0, _ramda.path)(['response', 'legislator']))).map(_ramda.flatten).map((0, _ramda.pluck)('@attributes')).map(saveLegislators(mdl));
+};
+
+var loadMemberProfile = function loadMemberProfile(mdl) {
+  return function (legislators) {
+    return (0, _ramda.traverse)(_data["default"].of, getMembers(mdl), (0, _ramda.pluck)('cid', legislators)).map((0, _ramda.map)((0, _ramda.path)(['response', 'member_profile']))).map(_ramda.flatten).map((0, _ramda.pluck)('@attributes'));
+  };
+};
+
+var loadData = function loadData(mdl) {
+  return function (state) {
+    state.status = 'loading';
+
+    var onSuccess = function onSuccess(members) {
+      mdl.data.legislators.map(function (leg) {
+        leg.data = (0, _ramda.head)(members.filter((0, _ramda.propEq)('member_id', leg.cid)));
       });
+      state.status = 'loaded';
+    };
+
+    var onError = function onError(err) {
+      console.error(err);
+      state.status = 'failed';
+    };
+
+    loadLegislatorsData(mdl).chain(loadMemberProfile(mdl)).fork(onError, onSuccess);
+  };
+};
+
+var PlotFinances = function PlotFinances() {
+  return {
+    oncreate: function oncreate(_ref) {
+      var dom = _ref.dom,
+          mdl = _ref.attrs.mdl;
+      var data = {
+        type: 'bar',
+        x: mdl.data.legislators.map(function (l) {
+          return l.firstlast;
+        }),
+        y: mdl.data.legislators.map(function (l) {
+          return l.data.net_high;
+        })
+      };
+      console.log('data', data);
+      return mdl.data.legislators && Plotly.newPlot('chart', [data]);
     },
-    view: function view() {
-      return m(".container");
+    view: function view(_ref2) {
+      var mdl = _ref2.attrs.mdl;
+      return (0, _mithril["default"])('.', {
+        id: 'chart',
+        style: {
+          width: '100vw',
+          height: '600px'
+        }
+      });
     }
   };
 };
 
-var IsLoading = m("svg[xmlns='http://www.w3.org/2000/svg'][xmlns:xlink='http://www.w3.org/1999/xlink'][width='200px'][height='200px'][viewBox='0 0 100 100'][preserveAspectRatio='xMidYMid']", {
-  style: {
-    margin: "auto",
-    background: "rgb(241, 242, 243)",
-    display: "block",
-    "shape-rendering": "auto"
-  }
-}, m("path[d='M10 50A40 40 0 0 0 90 50A40 42 0 0 1 10 50'][fill='#85a2b6'][stroke='none'][transform='rotate(17.5738 50 51)']", m("animateTransform[attributeName='transform'][type='rotate'][dur='1s'][repeatCount='indefinite'][keyTimes='0;1'][values='0 50 51;360 50 51']")));
-
-var loadWuhanVirusData = function loadWuhanVirusData(mdl) {
-  var onError = function onError(mdl) {
-    return function (err) {
-      return mdl.err.wuhan = err;
-    };
+var Legislators = function Legislators(mdl) {
+  var state = {
+    status: 'loading'
   };
-
-  var onSuccess = function onSuccess(mdl) {
-    return function (data) {
-      return mdl.data.wuhan = data;
-    };
-  };
-
-  m.request("https://covid19.mathdro.id/api").then(onSuccess(mdl), onError(mdl));
-};
-
-var wuhanStyle = function wuhanStyle(mdl) {
-  return {
-    // backgroundImage: `url(${mdl.data.wuhan.image}) center`,
-    height: "100vh",
-    width: "100vw"
-  };
-};
-
-var WuhanVirus = function WuhanVirus(mdl) {
   return {
     oninit: function oninit() {
-      return loadWuhanVirusData(mdl);
+      return loadData(mdl)(state);
     },
     view: function view() {
-      return mdl.data.wuhan ? m(".container", {
-        style: wuhanStyle(mdl)
-      }, [m(WuhanCrisis, {
+      return (0, _mithril["default"])('.', state.status == 'loading' && _isLoading["default"], state.status == 'failed' && 'FAILED', state.status == 'loaded' && [(0, _mithril["default"])(PlotFinances, {
         mdl: mdl
-      })]) : IsLoading;
+      }), (0, _mithril["default"])('input[type="range"]', {
+        min: 2008,
+        max: 2016,
+        step: 1,
+        value: mdl.data.year(),
+        onchange: function onchange(e) {
+          mdl.data.year(e.target.value);
+          loadData(mdl)(state);
+        }
+      }), (0, _mithril["default"])('h1', mdl.data.year())]);
     }
   };
 };
 
-var _default = WuhanVirus;
+var _default = Legislators;
 exports["default"] = _default;
 });
 
@@ -389,17 +347,80 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 });
 
-;require.register("model.js", function(exports, require, module) {
+;require.register("is-loading.js", function(exports, require, module) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
 exports["default"] = void 0;
+var IsLoading = m("svg[xmlns='http://www.w3.org/2000/svg'][xmlns:xlink='http://www.w3.org/1999/xlink'][width='200px'][height='200px'][viewBox='0 0 100 100'][preserveAspectRatio='xMidYMid']", {
+  style: {
+    margin: "auto",
+    background: "rgb(241, 242, 243)",
+    display: "block",
+    "shape-rendering": "auto"
+  }
+}, m("path[d='M10 50A40 40 0 0 0 90 50A40 42 0 0 1 10 50'][fill='#85a2b6'][stroke='none'][transform='rotate(17.5738 50 51)']", m("animateTransform[attributeName='transform'][type='rotate'][dur='1s'][repeatCount='indefinite'][keyTimes='0;1'][values='0 50 51;360 50 51']")));
+var _default = IsLoading;
+exports["default"] = _default;
+});
+
+;require.register("model.js", function(exports, require, module) {
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports["default"] = exports.membersUrl = exports.legislatorsUrl = void 0;
+
+var _data = _interopRequireDefault(require("data.task"));
+
+var _mithril = _interopRequireDefault(require("mithril"));
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }
+
+var api = '4fbc39be8c00b4af07a6f182c64d5c1a';
+var baseUrl = 'http://www.opensecrets.org/api/?method=';
+var apiKey = "&output=json&apikey=".concat(api);
+
+var legislatorUrl = function legislatorUrl(state) {
+  return "getLegislators&id=".concat(state);
+};
+
+var memberUrl = function memberUrl(cid) {
+  return function (year) {
+    return "memPFDprofile&year=".concat(year, "&cid=").concat(cid);
+  };
+};
+
+var HTTP = function HTTP(url) {
+  return new _data["default"](function (rej, res) {
+    return _mithril["default"].request(url).then(res, rej);
+  });
+};
+
+var legislatorsUrl = function legislatorsUrl(state) {
+  return "".concat(baseUrl).concat(legislatorUrl(state)).concat(apiKey);
+};
+
+exports.legislatorsUrl = legislatorsUrl;
+
+var membersUrl = function membersUrl(cid) {
+  return function (year) {
+    return "".concat(baseUrl).concat(memberUrl(cid)(year)).concat(apiKey);
+  };
+};
+
+exports.membersUrl = membersUrl;
+var states = ['AL', 'MT', 'AK', 'NE', 'AZ', 'NV', 'AR', 'NH', 'CA', 'NJ', 'CO', 'NM', 'CT', 'NY', 'DE', 'NC', 'FL', 'ND', 'GA', 'OH', 'HI', 'OK', 'ID', 'OR', 'IL', 'PA', 'IN', 'RI', 'IA', 'SC', 'KS', 'SD', 'KY', 'TN', 'LA', 'TX', 'ME', 'UT', 'MD', 'VT', 'MA', 'VA', 'MI', 'WA', 'MN', 'WV', 'MS', 'WI', 'MO', 'WY'];
 var model = {
+  HTTP: HTTP,
+  states: states,
   data: {
-    wuhan: null,
-    details: null
+    legislators: null,
+    details: null,
+    year: Stream(2016)
   },
   err: null,
   state: null,
@@ -409,7 +430,7 @@ var _default = model;
 exports["default"] = _default;
 });
 
-;require.register("___globals___", function(exports, require, module) {
+;require.alias("process/browser.js", "process");process = require('process');require.register("___globals___", function(exports, require, module) {
   
 
 // Auto-loaded modules from config.npm.globals.

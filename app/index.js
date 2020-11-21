@@ -1,4 +1,4 @@
-import WuhanVirus from "./app.js"
+import Legislators from "./app.js"
 import model from "./model.js"
 
 const root = document.body
@@ -47,4 +47,4 @@ model.settings.profile = getProfile(winW)
 
 checkWidth(winW)
 
-m.mount(root, WuhanVirus(model))
+m.mount(root, Legislators(model))
